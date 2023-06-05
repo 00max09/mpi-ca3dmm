@@ -43,6 +43,16 @@ Proc_grid get_grid_size(int num_processes, int n, int m, int k)
     return grid;
 }
 
+void run_cannon(int group, int n, int m, int k, Proc_grid g, MPI_Comm* group_comm){
+    int myGroupRank, myCannonGroupRank;
+    MPI_Comm_rank(group_comm, &myGroupRank);
+    MPI_Comm cannon_group_comm{};
+    MPI_Comm_split(group_comm, myGroupRank / (std::max(g.p_m, g.p_n) / std::min(g.p_m, g.p_n)) , myGroupRank, &cannon_group_comm);
+    MPI_Comm_rank(group_comm, &cannon_group_comm);
+    
+    
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 6)
@@ -53,9 +63,15 @@ int main(int argc, char *argv[])
     int n = std::stoi(std::string(argv[1]));
     int m = std::stoi(std::string(argv[2]));
     int k = std::stoi(std::string(argv[3]));
-    int numProcesses;
-    
+    int numProcesses, myRank;
+    MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numProcesses);
+    MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
     Proc_grid grid = get_grid_size(numProcesses, n, m, k);
-    
+    MPI_Comm group_comm{};
+    MPI_Comm_split(MPI_COMM_WORLD, myRank/grid.p_k, myRank, &group_comm);
+    int my_group = myRank/grid.p_k;
+    run_cannon(my_group, n, m, k, grid, &group_comm);
+    MPI_Finalize();
+
 }
