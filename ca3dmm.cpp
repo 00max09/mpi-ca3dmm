@@ -47,9 +47,24 @@ void run_cannon(int group, int n, int m, int k, Proc_grid g, MPI_Comm* group_com
     int myGroupRank, myCannonGroupRank;
     MPI_Comm_rank(group_comm, &myGroupRank);
     MPI_Comm cannon_group_comm{};
-    MPI_Comm_split(group_comm, myGroupRank / (std::max(g.p_m, g.p_n) / std::min(g.p_m, g.p_n)) , myGroupRank, &cannon_group_comm);
+    int cannonGroup =  myGroupRank / (std::max(g.p_m, g.p_n) / std::min(g.p_m, g.p_n));
+    MPI_Comm_split(group_comm, cannonGroup , myGroupRank, &cannon_group_comm);
     MPI_Comm_rank(group_comm, &cannon_group_comm);
-    
+    if(g.p_m <= g.p_n){ // we are not replicating A
+        int A_group_x_start = ((k+g.p_k-1)/g.p_k)*group;
+        int A_group_x_end = std::min(((k+g.p_k-1)/g.p_k)*(group+1), k);
+        int A_group_y_start = ((m+g.p_m-1)/g.p_m)*cannonGroup;
+        int A_group_y_end = std::min(((m+g.p_m-1)/g.p_m)*(cannonGroup+1), m);
+
+        
+        int B_group_y_start = ((k+g.p_k-1)/g.p_k)*group;
+        int B_group_y_end = std::min(((k+g.p_k-1)/g.p_k)*(group+1), k);
+        int B_group_x_start = 0;
+        int B_group_x_end = n;
+        
+
+
+    }
     
 }
 
