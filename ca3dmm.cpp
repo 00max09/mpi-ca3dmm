@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cmath>
+#include <vector>
 #include <mpi.h>
 
 struct Proc_grid
@@ -45,8 +46,19 @@ Proc_grid get_grid_size(int num_processes, int n, int m, int k)
 }
 
 class ParMatrix {
-    ParMatrix()
-}
+public:
+    std::vector<std::vector>> mat;
+    int x_size, y_size, x_start, x_end, y_start, y_end;
+    ParMatrix(int x_size, int y_size, int x_start, int x_end, int y_start, int y_end){
+        
+    }
+    int getValueRel(int x, int y){
+        return mat[x][y];
+    }
+    int getValueAbs(int x, int y){ //unsafe
+        return mat[x-x_start][y-y_start];
+    } 
+};
 
 
 void run_cannon(int group, int n, int m, int k, Proc_grid g, MPI_Comm* group_comm){
@@ -58,7 +70,7 @@ void run_cannon(int group, int n, int m, int k, Proc_grid g, MPI_Comm* group_com
     int cannonGroupAxisLength = (int) sqrt(cannonGroupSize);
     int cannonGroup =  myGroupRank / cannonGroupCount;
     MPI_Comm_split(group_comm, cannonGroup , myGroupRank, &cannon_group_comm);
-    MPI_Comm_rank(group_comm, &maCannonGroupRank);
+    MPI_Comm_rank(group_comm, &myCannonGroupRank);
     if(g.p_m <= g.p_n){ // we are not replicating A
         int A_group_x_start = ((k+g.p_k-1)/g.p_k)*group;
         int A_group_x_end = std::min(((k+g.p_k-1)/g.p_k)*(group+1), k);
@@ -69,8 +81,10 @@ void run_cannon(int group, int n, int m, int k, Proc_grid g, MPI_Comm* group_com
         
         int B_group_y_start = ((k+g.p_k-1)/g.p_k)*group;
         int B_group_y_end = std::min(((k+g.p_k-1)/g.p_k)*(group+1), k);
+        int B_group_y_length = B_group_y_end - B_group_y_start;
         int B_group_x_start = 0;
-        int B_group_x_end = n;
+        int B_group_x_end = m;
+        int B_group_x_length = B_group_x_end - B_group_x_start;
         
         int A_me_in_group_x = myCannonGroupRank / cannonGroupAxisLength;
         int A_me_in_group_y = myCannonGroupRank % cannonGroupAxisLength;
@@ -80,8 +94,26 @@ void run_cannon(int group, int n, int m, int k, Proc_grid g, MPI_Comm* group_com
         int A_my_y_start = A_group_y_start + A_group_y_length / cannonGroupAxisLength * A_me_in_group_y;
         int A_my_y_end = A_group_y_start + A_group_y_length / cannonGroupAxisLength * (A_me_in_group_y + 1);
 
+        ParMatrix a{k, n, A_my_x_start, A_my_x_end, A_my_y_start, A_my_y_end};
+        a.genWhole();
+        int B_me_in_group_x = myCannonGroupRank / cannonGroupAxisLength;
+        int B_me_in_group_y = myCannonGroupRank % cannonGroupAxisLength;
+        
+        int B_my_x_start = B_group_x_start + B_group_x_length / cannonGroupAxisLength * B_me_in_group_x;
+        int B_my_x_end = B_group_x_start + B_group_x_length / cannonGroupAxisLength * (B_me_in_group_x + 1);
+        int B_my_y_start = B_group_y_start + B_group_y_length / cannonGroupAxisLength * B_me_in_group_y;
+        int B_my_y_end = B_group_y_start + B_group_y_length / cannonGroupAxisLength * (B_me_in_group_y + 1);
          
 
+        int B_my_get_x_start = B_my_x_start + (B_my_x_end - B_group_x_start) * cannonGroup / cannonGroupCount;
+        int B_my_get_x_end = B_my_x_start + (B_my_x_end - B_group_x_start) * (cannonGroup+1) / cannonGroupCount;
+        int B_my_get_y_start = B_my_y_start;
+        int B_my_get_y_end = B_my_y_end;
+
+        
+        ParMatrix b{m, k, A_my_x_start, A_my_x_end, A_my_y_start, A_my_y_end};
+        b.genPart(B_my_get_x_start, B_my_get_x_end, B_my_get_y_start, B_my_get_y_end);
+        //create cross cannon communicators and get whole B then cannon
     }
     
 }
