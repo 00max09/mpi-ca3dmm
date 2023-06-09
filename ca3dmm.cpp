@@ -47,48 +47,67 @@ Proc_grid get_grid_size(int num_processes, int n, int m, int k)
     return grid;
 }
 
-class ParMatrix
-{
-public:
-    int mat[][];
-    int x_size, y_size, x_start, x_end, y_start, y_end;
-    ParMatrix(int x_size, int y_size, int x_start, int x_end, int y_start, int y_end)
-    {
-    }
-    int getValueRel(int x, int y)
-    {
-        return mat[x][y];
-    }
-    int getValueAbs(int x, int y)
-    { // unsafe
-        return mat[x - x_start][y - y_start];
-    }
-    void allGather()
-    {
-    }
-};
-
 class Matrix
 {
 public:
-    int mat[][];
-    int x_size, y_size;
-    Matrix(int x_size_, int y_size_)
+    double mat[];
+    int x_size, y_size, start_x, start_y;
+    Matrix(int x_size_, int y_size_, int start_x_, int start_y_)
     {
-        this.x_size = x_size_;
-        this.y_size = y_size_;
+        this->x_size = x_size_;
+        this->y_size = y_size_;
+        start_x = start_x_;
+        start_y = start_y_;
         mat = calloc(x_size * y_size, sizeof(int));
     }
+    void getWhole(int seed)
+    {
+        for (int i = 0; i < y_size; i++)
+        {
+            for (int z = 0; z < x_size; z++)
+            {
+                mat[i * x_size + z] = generate_double(seed, i + start_y, z + start_x);
+            }
+        }
+    }
 
+    void getPart(int get_x_start, int get_x_end, int get_y_start, int get_y_end, int seed, MPI_Comm *cross_cannon_group)
+    {
+        for (int i = get_y_start; i < get_y_end; i++)
+        {
+            for (int z = get_x_start; z < get_x_end; z++)
+            {
+                mat[(i - start_y) * x_size + z - start_x] = generate_double(seed, i, z);
+            }
+        }
+        int part_size = (get_y_end - get_y_start) * (get_x_end - get_x_start);
+        int processes;
+        MPI_Comm_size(cross_cannon_group, &processes);
+        int recvcounts[processes], displs[processes];
+        int count_y_start = 0;
+        for (int i = 0; i < processes; i++)
+        {
+            int count_y_end = y_size * (i + 1) / processes;
+            recvcounts[i] = (count_y_end - count_y_start) * x_size;
+            displs[i] = count_y_start[i] * x_size;
+            count_y_start = count_y_end;
+        }
+        MPI_Allgatherv(mat + (get_y_start - start_y) * y_size, part_size,
+                       MPI_DOUBLE, mat, recvcounts,
+                       displs, MPI_DOUBLE, cross_cannon_group);
+    }
     ~Matrix()
     {
         free(mat);
     }
-} void performCannon(ParMatrix a_, ParMatrix b_, int A_group_y_length, int B_group_x_length, MPI_Comm *cannon_group_comm)
+};
+void performCannon(Matrix a, Matrix b, int A_group_y_length, int B_group_x_length, MPI_Comm *cannon_group_comm, int my_group, int myGroupRank, bool verbose, double count_greater, Proc_grid g)
 {
-    Matrix c{b.x_size, a.y_size};
-
+    Matrix c{b.x_size, a.y_size, b.start_x, a.start_y};
+    int cannonGroupCount = (std::max(g.p_m, g.p_n) / std::min(g.p_m, g.p_n));
     // MPI_Comm cannon_group_comm_cart{};
+    int cannonGroupSize;
+    MPI_Comm_size(cannon_group_comm, &cannonGroupSize);
     int cannonGroupAxisLength = (int)sqrt(cannonGroupSize);
     int myGroupRank, myCannonGroupRank;
     MPI_Comm_rank(cannon_group_comm, &myCannonGroupRank);
@@ -132,9 +151,66 @@ public:
         a = a_new; // xD
         b = b_new; // XD
     }
+    int myRank, cross_group_comm_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+
+    MPI_Comm cross_group_comm{};
+    MPI_Comm_split(MPI_COMM_WORLD, myGroupRank, myRank, &cross_group_comm);
+    MPI_Comm_rank(cross_group_comm, &cross_group_comm_rank);
+
+    MPI_Reduce(
+        c.mat,
+        c.mat,
+        c.x_size * c.y_size,
+        MPI_DOUBLE,
+        MPI_SUM,
+        0,
+        cross_group_comm_rank);
+
+    MPI_Comm printing_g_comm{};
+    if (cross_group_comm_rank == 0)
+    {
+        MPI_Comm_split(MPI_COMM_WORLD, 0, myRank, &printing_g_comm);
+
+        if (verbose)
+        {
+        }
+        else
+        {
+            long long int count = 0;
+            for (int i = 0; i < c.y_size; i++)
+            {
+                for (int z = 0; z < c.x_size; z++)
+                {
+                    if (c[i][z] > count_greater)
+                    {
+                        count++;
+                    }
+                }
+            }
+            MPI_Reduce(
+                &count,
+                &count,
+                1,
+                MPI_LONG_LONG_INT,
+                MPI_SUM,
+                0,
+                printing_g_comm);
+            int print_rank;
+            MPI_Comm_rank(printing_g_comm, &print_rank);
+            if (print_rank == 0)
+            {
+                std::cout << count;
+            }
+        }
+    }
+    else
+    {
+        MPI_Comm_split(MPI_COMM_WORLD, 1, myRank, &printing_g_comm);
+    }
 }
 
-void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, int> seeds, bool verbose, int count_greater, MPI_Comm *group_comm)
+void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, int> seeds, bool verbose, double count_greater, MPI_Comm *group_comm)
 {
     int myGroupRank;
     MPI_Comm_rank(group_comm, &myGroupRank);
@@ -156,12 +232,12 @@ void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, 
 
     int A_group_x_start, A_group_y_start, A_group_x_end, A_group_y_end, B_group_x_start, B_group_y_start, B_group_x_end, B_group_y_end;
 
-    //these are independent of p_m and p_n values
+    // these are independent of p_m and p_n values
     A_group_x_start = ((k + g.p_k - 1) / g.p_k) * group;
     A_group_x_end = std::min(((k + g.p_k - 1) / g.p_k) * (group + 1), k);
     B_group_y_start = ((k + g.p_k - 1) / g.p_k) * group;
     B_group_y_end = std::min(((k + g.p_k - 1) / g.p_k) * (group + 1), k);
-        
+
     if (g.p_m <= g.p_n)
     { // we are not replicating A
         A_group_y_start = ((m + g.p_m - 1) / g.p_m) * cannonGroup;
@@ -169,7 +245,8 @@ void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, 
 
         B_group_x_start = 0;
         B_group_x_end = m;
-    }else
+    }
+    else
     { // we are not replicating B
         A_group_y_start = 0;
         A_group_y_end = n;
@@ -183,9 +260,7 @@ void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, 
     int B_group_y_length = B_group_y_end - B_group_y_start;
     int B_group_x_length = B_group_x_end - B_group_x_start;
 
-
-
-    //need to start to think :(())
+    // need to start to think :(())
     int A_me_in_group_x = myCannonGroupRank / cannonGroupAxisLength;
     int A_me_in_group_y = myCannonGroupRank % cannonGroupAxisLength;
 
@@ -194,27 +269,51 @@ void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, 
     int A_my_y_start = A_group_y_start + A_group_y_length / cannonGroupAxisLength * A_me_in_group_y;
     int A_my_y_end = A_group_y_start + A_group_y_length / cannonGroupAxisLength * (A_me_in_group_y + 1);
 
-    ParMatrix a{k, n, A_my_x_start, A_my_x_end, A_my_y_start, A_my_y_end};
-    a.genWhole();
-    int B_me_in_group_x = myCannonGroupRank / cannonGroupAxisLength;
-    int B_me_in_group_y = myCannonGroupRank % cannonGroupAxisLength;
+    Matrix a{A_my_y_end - A_my_y_start, A_my_x_end - A_my_x_start, A_my_x_start, A_my_y_start};
+
+    int A_my_get_x_start = A_my_x_start;
+    int A_my_get_x_end = A_my_x_end;
+    if (g.p_m <= g.p_n)
+    { // we are not replicating A
+
+        int A_my_get_y_start = A_my_y_start;
+        int A_my_get_y_end = A_my_y_end;
+        a.getWhole(A_my_x_start, A_my_y_start, seeds.first);
+    }
+    else
+    { // we are not replicating B
+        int A_my_get_y_start = A_my_y_start + (A_my_y_end - A_group_y_start) * cannonGroup / cannonGroupCount;
+        int A_my_get_y_end = A_my_y_start + (A_my_y_end - A_group_y_start) * (cannonGroup + 1) / cannonGroupCount;
+        a.getPart(A_my_get_x_start, A_my_get_x_end, A_my_get_y_start, A_my_get_y_end, seeds.first, &cross_cannon_group_comm);
+    }
+
+    int B_me_in_group_x = myCannonGroupRank % cannonGroupAxisLength;
+    int B_me_in_group_y = myCannonGroupRank / cannonGroupAxisLength;
 
     int B_my_x_start = B_group_x_start + B_group_x_length / cannonGroupAxisLength * B_me_in_group_x;
     int B_my_x_end = B_group_x_start + B_group_x_length / cannonGroupAxisLength * (B_me_in_group_x + 1);
     int B_my_y_start = B_group_y_start + B_group_y_length / cannonGroupAxisLength * B_me_in_group_y;
     int B_my_y_end = B_group_y_start + B_group_y_length / cannonGroupAxisLength * (B_me_in_group_y + 1);
 
-    int B_my_get_x_start = B_my_x_start + (B_my_x_end - B_group_x_start) * cannonGroup / cannonGroupCount;
-    int B_my_get_x_end = B_my_x_start + (B_my_x_end - B_group_x_start) * (cannonGroup + 1) / cannonGroupCount;
-    int B_my_get_y_start = B_my_y_start;
-    int B_my_get_y_end = B_my_y_end;
+    Matrix b{B_my_y_end - B_my_y_start, B_my_x_end - B_my_x_start, B_my_x_start, B_my_y_start};
 
-    ParMatrix b{m, k, A_my_x_start, A_my_x_end, A_my_y_start, A_my_y_end};
-    b.genPart(B_my_get_x_start, B_my_get_x_end, B_my_get_y_start, B_my_get_y_end);
-    // and get whole B then cannon
-    b.allGather();
-    performCannon(a, b, A_group_y_length, B_group_x_length);
-}
+    int B_my_get_x_start = B_my_x_start;
+    int B_my_get_x_end = B_my_x_end;
+
+    if (g.p_m <= g.p_n)
+    { // we are not replicating A
+        int B_my_get_y_start = B_my_y_start + (B_my_y_end - B_group_y_start) * cannonGroup / cannonGroupCount;
+        int B_my_get_y_end = B_my_y_start + (B_my_y_end - B_group_y_start) * (cannonGroup + 1) / cannonGroupCount;
+        b.getPart(B_my_get_x_start, B_my_get_x_end, B_my_get_y_start, B_my_get_y_end, seeds.second, &cross_cannon_group_comm);
+    }
+    else
+    {
+        // we are not replicating B
+        int B_my_get_y_start = B_my_y_start;
+        int B_my_get_y_end = B_my_y_end;
+        a.getWhole(B_my_x_start, B_my_y_start, seeds.second);
+    }
+    performCannon(a, b, A_group_y_length, B_group_x_length, cannon_group_comm, group, myGroupRank, verbose, count_greater, g);
 }
 
 int main(int argc, char *argv[])
@@ -236,14 +335,14 @@ int main(int argc, char *argv[])
         seed = strtok(NULL, ",");
     }
     bool verbose = false;
-    int print_greater = 0;
+    double print_greater = 0;
     if (argv[6] == "-v")
     {
         verbose = true;
     }
     else
     {
-        print_greater = std::stoi(std::string(argv[7]));
+        print_greater = std::stod(std::string(argv[7]));
     }
     int numProcesses, myRank;
     MPI_Init(&argc, &argv);
