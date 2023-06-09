@@ -1,3 +1,6 @@
+// TODO : long longi, usunięcie nieużywanych wątków tak aby nie odpierdalały, wypisywanie
+
+
 #include <iostream>
 #include <cmath>
 #include <vector>
@@ -26,7 +29,7 @@ Proc_grid get_grid_size(int num_processes, int n, int m, int k)
                 {
                     break;
                 }
-                if (p_m * p_n * p_k >= num_processes * 19 / 20 && std::max(p_m, p_n) % std::min(p_m, p_n) == 0)
+                if (20 * p_m * p_n * p_k >= num_processes * 19 && std::max(p_m, p_n) % std::min(p_m, p_n) == 0)
                 {
                     long long conf_cost = p_m * k * n + p_n * m * k + p_k * m * n;
                     if (conf_cost <= best_res)
@@ -50,15 +53,15 @@ Proc_grid get_grid_size(int num_processes, int n, int m, int k)
 class Matrix
 {
 public:
-    double mat[];
     int x_size, y_size, start_x, start_y;
+    double *mat;
     Matrix(int x_size_, int y_size_, int start_x_, int start_y_)
     {
         this->x_size = x_size_;
         this->y_size = y_size_;
         start_x = start_x_;
         start_y = start_y_;
-        mat = calloc(x_size * y_size, sizeof(int));
+        mat = (double *)calloc(x_size * y_size, sizeof(double));
     }
     void getWhole(int seed)
     {
@@ -82,72 +85,88 @@ public:
         }
         int part_size = (get_y_end - get_y_start) * (get_x_end - get_x_start);
         int processes;
-        MPI_Comm_size(cross_cannon_group, &processes);
+        MPI_Comm_size(*cross_cannon_group, &processes);
         int recvcounts[processes], displs[processes];
         int count_y_start = 0;
         for (int i = 0; i < processes; i++)
         {
             int count_y_end = y_size * (i + 1) / processes;
             recvcounts[i] = (count_y_end - count_y_start) * x_size;
-            displs[i] = count_y_start[i] * x_size;
+            displs[i] = count_y_start * x_size;
             count_y_start = count_y_end;
         }
-        MPI_Allgatherv(mat + (get_y_start - start_y) * y_size, part_size,
+        // std::cout << part_size << " " << get_x_start << " " << get_x_end << " " << get_y_start << " " << get_y_end << std::endl;
+        MPI_Allgatherv(mat + (get_y_start - start_y) * x_size, part_size,
                        MPI_DOUBLE, mat, recvcounts,
-                       displs, MPI_DOUBLE, cross_cannon_group);
+                       displs, MPI_DOUBLE, *cross_cannon_group);
+        // for (int i = 0; i < y_size; i++)
+        //  {
+        //         for (int z = 0; z < x_size; z++)
+        //         {
+        //             std::cout << mat[i * x_size + z] << " ";
+        //         }
+        //         std::cout << std::endl;
+        //     }               
     }
     ~Matrix()
     {
-        free(mat);
+        // free(mat);
     }
 };
-void performCannon(Matrix a, Matrix b, int A_group_y_length, int B_group_x_length, MPI_Comm *cannon_group_comm, int my_group, int myGroupRank, bool verbose, double count_greater, Proc_grid g)
+void performCannon(Matrix a, Matrix b, int A_group_x_length, int B_group_y_length, MPI_Comm *cannon_group_comm, int my_group, int myGroupRank, bool verbose, double count_greater, Proc_grid g)
 {
+
     Matrix c{b.x_size, a.y_size, b.start_x, a.start_y};
+
     int cannonGroupCount = (std::max(g.p_m, g.p_n) / std::min(g.p_m, g.p_n));
     // MPI_Comm cannon_group_comm_cart{};
     int cannonGroupSize;
-    MPI_Comm_size(cannon_group_comm, &cannonGroupSize);
+    MPI_Comm_size(*cannon_group_comm, &cannonGroupSize);
     int cannonGroupAxisLength = (int)sqrt(cannonGroupSize);
-    int myGroupRank, myCannonGroupRank;
-    MPI_Comm_rank(cannon_group_comm, &myCannonGroupRank);
-    int me_in_group_y = myCannonGroupRank / cannonGroupAxisLength;
-    int me_in_group_y_act = myCannonGroupRank / cannonGroupAxisLength;
+    int myCannonGroupRank;
+    MPI_Comm_rank(*cannon_group_comm, &myCannonGroupRank);
+    // axis for a
+    int A_me_in_group_y = myCannonGroupRank / cannonGroupAxisLength;
+    int A_me_in_group_x = myCannonGroupRank % cannonGroupAxisLength;
 
-    int me_in_group_x = myCannonGroupRank % cannonGroupAxisLength;
-    int me_in_group_x_act = myCannonGroupRank % cannonGroupAxisLength;
+    int B_me_in_group_x = myCannonGroupRank % cannonGroupAxisLength;
+    int B_me_in_group_y = myCannonGroupRank / cannonGroupAxisLength;
 
     // MPI_Cart_create(cannon_group_comm, 2, dim, period, false, &cannon_group_comm_cart);
     for (int i = 0; i < cannonGroupAxisLength; i++)
     {
+        //std::cout << i << " " << cannonGroupAxisLength << " " << myCannonGroupRank << " " << a.x_size << " " << a.y_size << " " << b.x_size << " " << b.y_size << std::endl;
+        // std::cout.flush();
         cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                     a.y_size, b.x_size, a.x_size,
-                    1.0, a.mat, a.y_size, B, b.y_size, 1.0, c.mat, c.y_size);
-        int dest_a = me_in_group_y * cannonGroupAxisLength + (me_in_group_x_act + cannonGroupAxisLength - 1) % cannonGroupAxisLength;
-        int recv_a = me_in_group_y * cannonGroupAxisLength + (me_in_group_x_act + cannonGroupAxisLength + 1) % cannonGroupAxisLength;
-        int dest_b = (me_in_group_y_act + cannonGroupAxisLength - 1) / cannonGroupAxisLength * cannonGroupAxisLength + me_in_group_x;
-        int recv_b = (me_in_group_y_act + cannonGroupAxisLength + 1) / cannonGroupAxisLength * cannonGroupAxisLength + me_in_group_x;
-        int me_in_group_y_act = (me_in_group_y_act - 1 + cannonGroupAxisLength) % cannonGroupAxisLength;
-        int A_my_y_start = A_group_y_length / cannonGroupAxisLength * me_in_group_y_act;
-        int A_my_y_end = A_group_y_length / cannonGroupAxisLength * (me_in_group_y_act + 1);
-        Matrix a_new{a.x_size, A_my_y_end - A_my_y_start};
+                    1.0, a.mat, a.x_size, b.mat, b.x_size, 1.0, c.mat, c.x_size);
+        int dest_a = A_me_in_group_y * cannonGroupAxisLength + (A_me_in_group_x + cannonGroupAxisLength - 1) % cannonGroupAxisLength;
+        int recv_a = A_me_in_group_y * cannonGroupAxisLength + (A_me_in_group_x + cannonGroupAxisLength + 1) % cannonGroupAxisLength;
+        int dest_b = (B_me_in_group_y - 1 + cannonGroupAxisLength) % cannonGroupAxisLength * cannonGroupAxisLength + B_me_in_group_x;
+        int recv_b = (B_me_in_group_y + 1) % cannonGroupAxisLength * cannonGroupAxisLength + B_me_in_group_x;
+        //std::cout << dest_a << " " << recv_a << " " << dest_b << " " << recv_b << "G GGG " << myCannonGroupRank << " XXXX " << cannonGroupAxisLength << std::endl;
+        //B_me_in_group_y = (B_me_in_group_y + 1 + cannonGroupAxisLength) % cannonGroupAxisLength;
+        //A_me_in_group_x = (A_me_in_group_x + 1 + cannonGroupAxisLength) % cannonGroupAxisLength;
 
-        int MPI_Sendrecv(a.mat, a.x_size * a.y_size, MPI_DOUBLE,
-                         dest_a, i, a_new.mat, a_new.x_size * a_new.y_size,
-                         MPI_DOUBLE, recv_a, i,
-                         *cannon_group_comm, MPI_STATUS_IGNORE);
+        int A_my_x_start = A_group_x_length * ((A_me_in_group_x + i +1+ A_me_in_group_y+  2*cannonGroupAxisLength)%cannonGroupAxisLength) / cannonGroupAxisLength;     //??
+        int A_my_x_end = A_group_x_length * (((A_me_in_group_x + i +1 + A_me_in_group_y+  2*cannonGroupAxisLength)%cannonGroupAxisLength)+1) / cannonGroupAxisLength; //??
+        Matrix a_new{A_my_x_end - A_my_x_start, a.y_size, 0, 0};
 
-        int me_in_group_x_act = (me_in_group_x_act - 1 + cannonGroupAxisLength) % cannonGroupAxisLength;
-        int B_my_x_start = B_group_x_length / cannonGroupAxisLength * me_in_group_x_act;
-        int B_my_x_end = B_group_x_length / cannonGroupAxisLength * (me_in_group_x_act + 1);
-        Matrix b_new{a.x_size, B_my_x_end - B_my_x_start};
-        int MPI_Sendrecv(b.mat, b.x_size * b.y_size, MPI_DOUBLE,
-                         dest_b, i, b_new.mat, b_new.x_size * b_new.y_size,
-                         MPI_DOUBLE, recv_b, i,
-                         *cannon_group_comm, MPI_STATUS_IGNORE);
+        MPI_Sendrecv(a.mat, a.x_size * a.y_size, MPI_DOUBLE,
+                     dest_a, i, a_new.mat, a_new.x_size * a_new.y_size,
+                     MPI_DOUBLE, recv_a, i,
+                     *cannon_group_comm, MPI_STATUS_IGNORE);
+        // std::cout << "ÓWNo" << std::endl;
+        int B_my_y_start = B_group_y_length * B_me_in_group_y / cannonGroupAxisLength;     //??
+        int B_my_y_end = B_group_y_length * (B_me_in_group_y + 1) / cannonGroupAxisLength; //??
+        Matrix b_new{b.x_size, A_my_x_end - A_my_x_start, 0, 0};
+        MPI_Sendrecv(b.mat, b.x_size * b.y_size, MPI_DOUBLE,
+                     dest_b, i, b_new.mat, b_new.x_size * b_new.y_size,
+                     MPI_DOUBLE, recv_b, i,
+                     *cannon_group_comm, MPI_STATUS_IGNORE);
 
-        ~a();      // that cant work
-        ~b();      // that cant work
+        // delete &a; // that cant work
+        // delete &b; // that cant work
         a = a_new; // xD
         b = b_new; // XD
     }
@@ -157,16 +176,17 @@ void performCannon(Matrix a, Matrix b, int A_group_y_length, int B_group_x_lengt
     MPI_Comm cross_group_comm{};
     MPI_Comm_split(MPI_COMM_WORLD, myGroupRank, myRank, &cross_group_comm);
     MPI_Comm_rank(cross_group_comm, &cross_group_comm_rank);
-
+    Matrix c2{c.x_size, c.y_size, c.start_x, c.start_y};
+    // std::cout << c.x_size << " " << c.y_size << std::endl;
     MPI_Reduce(
         c.mat,
-        c.mat,
+        c2.mat,
         c.x_size * c.y_size,
         MPI_DOUBLE,
         MPI_SUM,
         0,
-        cross_group_comm_rank);
-
+        cross_group_comm);
+    // std::cout << "CISEM" << std::endl;
     MPI_Comm printing_g_comm{};
     if (cross_group_comm_rank == 0)
     {
@@ -174,23 +194,33 @@ void performCannon(Matrix a, Matrix b, int A_group_y_length, int B_group_x_lengt
 
         if (verbose)
         {
+            for (int i = 0; i < c2.y_size; i++)
+            {
+                for (int z = 0; z < c2.x_size; z++)
+                {
+                    std::cout << c2.mat[i * c2.x_size + z] << " ";
+                }
+                std::cout << std::endl;
+            }
         }
         else
         {
-            long long int count = 0;
-            for (int i = 0; i < c.y_size; i++)
+            long long int count = 0, count2 = 0;
+            for (int i = 0; i < c2.y_size; i++)
             {
-                for (int z = 0; z < c.x_size; z++)
+                for (int z = 0; z < c2.x_size; z++)
                 {
-                    if (c[i][z] > count_greater)
+                    //std::cout<<c2.mat[i * c2.x_size + z]<< " "<<count_greater<<std::endl;
+                    if (c2.mat[i * c2.x_size + z] > count_greater)
                     {
+                       // std::cout<<"STRDAM"<<std::endl;
                         count++;
                     }
                 }
             }
             MPI_Reduce(
                 &count,
-                &count,
+                &count2,
                 1,
                 MPI_LONG_LONG_INT,
                 MPI_SUM,
@@ -200,7 +230,7 @@ void performCannon(Matrix a, Matrix b, int A_group_y_length, int B_group_x_lengt
             MPI_Comm_rank(printing_g_comm, &print_rank);
             if (print_rank == 0)
             {
-                std::cout << count;
+                std::cout << count2 << std::endl;
             }
         }
     }
@@ -213,46 +243,47 @@ void performCannon(Matrix a, Matrix b, int A_group_y_length, int B_group_x_lengt
 void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, int> seeds, bool verbose, double count_greater, MPI_Comm *group_comm)
 {
     int myGroupRank;
-    MPI_Comm_rank(group_comm, &myGroupRank);
+    MPI_Comm_rank(*group_comm, &myGroupRank);
 
     int cannonGroupCount = (std::max(g.p_m, g.p_n) / std::min(g.p_m, g.p_n));
     int cannonGroupSize = g.p_m * g.p_n / cannonGroupCount; // square of some number
     int cannonGroupAxisLength = (int)sqrt(cannonGroupSize);
-    int cannonGroup = myGroupRank / cannonGroupCount;
+    int cannonGroup = myGroupRank / cannonGroupSize;
 
     MPI_Comm cannon_group_comm{};
-    MPI_Comm_split(group_comm, cannonGroup, myGroupRank, &cannon_group_comm);
+    MPI_Comm_split(*group_comm, cannonGroup, myGroupRank, &cannon_group_comm);
     int myCannonGroupRank;
     MPI_Comm_rank(cannon_group_comm, &myCannonGroupRank);
 
     MPI_Comm cross_cannon_group_comm{};
     int crossCannonGroup = myGroupRank % cannonGroupSize;
 
-    MPI_Comm_split(group_comm, crossCannonGroup, myGroupRank, &cross_cannon_group_comm);
+    MPI_Comm_split(*group_comm, crossCannonGroup, myGroupRank, &cross_cannon_group_comm);
 
     int A_group_x_start, A_group_y_start, A_group_x_end, A_group_y_end, B_group_x_start, B_group_y_start, B_group_x_end, B_group_y_end;
 
     // these are independent of p_m and p_n values
-    A_group_x_start = ((k + g.p_k - 1) / g.p_k) * group;
-    A_group_x_end = std::min(((k + g.p_k - 1) / g.p_k) * (group + 1), k);
-    B_group_y_start = ((k + g.p_k - 1) / g.p_k) * group;
-    B_group_y_end = std::min(((k + g.p_k - 1) / g.p_k) * (group + 1), k);
+    A_group_x_start = k * group / g.p_k;
+    A_group_x_end = (group + 1) * k / g.p_k;
+    B_group_y_start = k * group / g.p_k;
+    B_group_y_end = (group + 1) * k / g.p_k;
 
-    if (g.p_m <= g.p_n)
+    if (g.p_m >= g.p_n)
     { // we are not replicating A
-        A_group_y_start = ((m + g.p_m - 1) / g.p_m) * cannonGroup;
-        A_group_y_end = std::min(((m + g.p_m - 1) / g.p_m) * (cannonGroup + 1), m);
+        A_group_y_start = (m * cannonGroup / cannonGroupCount);
+        A_group_y_end = m * (cannonGroup + 1) / cannonGroupCount;
 
         B_group_x_start = 0;
-        B_group_x_end = m;
+        B_group_x_end = n;
     }
     else
     { // we are not replicating B
+      //  std::cout<<"SIEMSON JEBSON"<<std::endl;
         A_group_y_start = 0;
-        A_group_y_end = n;
+        A_group_y_end = m;
 
-        B_group_x_start = ((n + g.p_n - 1) / g.p_n) * cannonGroup;
-        B_group_x_end = std::min(((n + g.p_n - 1) / g.p_n) * (cannonGroup + 1), n);
+        B_group_x_start = n * cannonGroup / cannonGroupCount;
+        B_group_x_end = n * (cannonGroup + 1) / cannonGroupCount;
     }
 
     int A_group_x_length = A_group_x_end - A_group_x_start;
@@ -261,49 +292,54 @@ void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, 
     int B_group_x_length = B_group_x_end - B_group_x_start;
 
     // need to start to think :(())
-    int A_me_in_group_x = myCannonGroupRank / cannonGroupAxisLength;
-    int A_me_in_group_y = myCannonGroupRank % cannonGroupAxisLength;
+    int A_me_in_group_x = ((myCannonGroupRank / cannonGroupAxisLength) + (myCannonGroupRank % cannonGroupAxisLength)) % cannonGroupAxisLength;
+    int A_me_in_group_y = myCannonGroupRank / cannonGroupAxisLength;
 
-    int A_my_x_start = A_group_x_start + A_group_x_length / cannonGroupAxisLength * A_me_in_group_x;
-    int A_my_x_end = A_group_x_start + A_group_x_length / cannonGroupAxisLength * (A_me_in_group_x + 1);
-    int A_my_y_start = A_group_y_start + A_group_y_length / cannonGroupAxisLength * A_me_in_group_y;
-    int A_my_y_end = A_group_y_start + A_group_y_length / cannonGroupAxisLength * (A_me_in_group_y + 1);
+    int A_my_x_start = A_group_x_start + A_group_x_length * A_me_in_group_x / cannonGroupAxisLength;
+    int A_my_x_end = A_group_x_start + A_group_x_length * (A_me_in_group_x + 1) / cannonGroupAxisLength;
+    int A_my_y_start = A_group_y_start + A_group_y_length * A_me_in_group_y / cannonGroupAxisLength;
+    int A_my_y_end = A_group_y_start + A_group_y_length * (A_me_in_group_y + 1) / cannonGroupAxisLength;
 
-    Matrix a{A_my_y_end - A_my_y_start, A_my_x_end - A_my_x_start, A_my_x_start, A_my_y_start};
+    Matrix a{A_my_x_end - A_my_x_start, A_my_y_end - A_my_y_start, A_my_x_start, A_my_y_start};
 
     int A_my_get_x_start = A_my_x_start;
     int A_my_get_x_end = A_my_x_end;
-    if (g.p_m <= g.p_n)
+    if (g.p_m >=g.p_n)
     { // we are not replicating A
 
         int A_my_get_y_start = A_my_y_start;
         int A_my_get_y_end = A_my_y_end;
-        a.getWhole(A_my_x_start, A_my_y_start, seeds.first);
+
+      //  std::cout << A_my_get_x_start << " " << A_my_get_x_end << " " << A_my_get_y_start << " " << A_my_get_y_end << " A " << myCannonGroupRank << std::endl;
+        a.getWhole(seeds.first);
     }
     else
-    { // we are not replicating B
-        int A_my_get_y_start = A_my_y_start + (A_my_y_end - A_group_y_start) * cannonGroup / cannonGroupCount;
-        int A_my_get_y_end = A_my_y_start + (A_my_y_end - A_group_y_start) * (cannonGroup + 1) / cannonGroupCount;
+    { // we are not replicating B;
+        int A_my_get_y_start = A_my_y_start + (A_my_y_end - A_my_y_start) * cannonGroup / cannonGroupCount;
+        int A_my_get_y_end = A_my_y_start + (A_my_y_end - A_my_y_start) * (cannonGroup + 1) / cannonGroupCount;
         a.getPart(A_my_get_x_start, A_my_get_x_end, A_my_get_y_start, A_my_get_y_end, seeds.first, &cross_cannon_group_comm);
     }
 
     int B_me_in_group_x = myCannonGroupRank % cannonGroupAxisLength;
-    int B_me_in_group_y = myCannonGroupRank / cannonGroupAxisLength;
+    int B_me_in_group_y = (myCannonGroupRank % cannonGroupAxisLength + myCannonGroupRank / cannonGroupAxisLength) % cannonGroupAxisLength;
 
-    int B_my_x_start = B_group_x_start + B_group_x_length / cannonGroupAxisLength * B_me_in_group_x;
-    int B_my_x_end = B_group_x_start + B_group_x_length / cannonGroupAxisLength * (B_me_in_group_x + 1);
-    int B_my_y_start = B_group_y_start + B_group_y_length / cannonGroupAxisLength * B_me_in_group_y;
-    int B_my_y_end = B_group_y_start + B_group_y_length / cannonGroupAxisLength * (B_me_in_group_y + 1);
+    int B_my_x_start = B_group_x_start + B_me_in_group_x * B_group_x_length / cannonGroupAxisLength;
+    int B_my_x_end = B_group_x_start + (B_me_in_group_x + 1) * B_group_x_length / cannonGroupAxisLength;
+    int B_my_y_start = B_group_y_start + B_me_in_group_y * B_group_y_length / cannonGroupAxisLength;
+    int B_my_y_end = B_group_y_start + (B_me_in_group_y + 1) * B_group_y_length / cannonGroupAxisLength;
 
-    Matrix b{B_my_y_end - B_my_y_start, B_my_x_end - B_my_x_start, B_my_x_start, B_my_y_start};
+    Matrix b{B_my_x_end - B_my_x_start, B_my_y_end - B_my_y_start, B_my_x_start, B_my_y_start};
 
     int B_my_get_x_start = B_my_x_start;
     int B_my_get_x_end = B_my_x_end;
 
-    if (g.p_m <= g.p_n)
+    if (g.p_m >=g.p_n)
     { // we are not replicating A
-        int B_my_get_y_start = B_my_y_start + (B_my_y_end - B_group_y_start) * cannonGroup / cannonGroupCount;
-        int B_my_get_y_end = B_my_y_start + (B_my_y_end - B_group_y_start) * (cannonGroup + 1) / cannonGroupCount;
+
+      //  std::cout << "FSDFD " << myGroupRank << " " << cannonGroup << " " << cannonGroupCount << std::endl;
+        int B_my_get_y_start = B_my_y_start + (B_my_y_end - B_my_y_start) * cannonGroup / cannonGroupCount;
+        int B_my_get_y_end = B_my_y_start + (B_my_y_end - B_my_y_start) * (cannonGroup + 1) / cannonGroupCount;
+      //  std::cout << B_my_get_x_start << " " << B_my_get_x_end << " " << B_my_get_y_start << " " << B_my_get_y_end << " G " << myCannonGroupRank << std::endl;
         b.getPart(B_my_get_x_start, B_my_get_x_end, B_my_get_y_start, B_my_get_y_end, seeds.second, &cross_cannon_group_comm);
     }
     else
@@ -311,9 +347,9 @@ void prepare_cannon(int group, int n, int m, int k, Proc_grid g, std::pair<int, 
         // we are not replicating B
         int B_my_get_y_start = B_my_y_start;
         int B_my_get_y_end = B_my_y_end;
-        a.getWhole(B_my_x_start, B_my_y_start, seeds.second);
+        b.getWhole(seeds.second);
     }
-    performCannon(a, b, A_group_y_length, B_group_x_length, cannon_group_comm, group, myGroupRank, verbose, count_greater, g);
+    performCannon(a, b, A_group_x_length, B_group_y_length, &cannon_group_comm, group, myGroupRank, verbose, count_greater, g);
 }
 
 int main(int argc, char *argv[])
@@ -336,7 +372,8 @@ int main(int argc, char *argv[])
     }
     bool verbose = false;
     double print_greater = 0;
-    if (argv[6] == "-v")
+    // std::cout << argv[6] << std::endl;
+    if (std::string(argv[6]) == "-v")
     {
         verbose = true;
     }
@@ -348,11 +385,16 @@ int main(int argc, char *argv[])
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numProcesses);
     MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+
     Proc_grid grid = get_grid_size(numProcesses, n, m, k);
+    std::cout << grid.p_n << " " << grid.p_k << " " << grid.p_m << std::endl;
     MPI_Comm group_comm{};
-    MPI_Comm_split(MPI_COMM_WORLD, myRank / grid.p_k, myRank, &group_comm);
-    int my_group = myRank / grid.p_k;
-    for (int i = 0; i < seeds.size; i++)
+    MPI_Comm_split(MPI_COMM_WORLD, myRank / (grid.p_m * grid.p_n), myRank % (grid.p_m * grid.p_n), &group_comm);
+    int my_group = myRank / (grid.p_m * grid.p_n); //,myRank2;
+    // MPI_Comm_rank(group_comm, &myRank2);
+     //std::cout<<"RANK IN GROUP "<<my_group<<" "<<std::endl;
+
+    for (int i = 0; i < seeds.size(); i++)
     {
         prepare_cannon(my_group, n, m, k, grid, seeds[i], verbose, print_greater, &group_comm);
     }
