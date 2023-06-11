@@ -1,5 +1,3 @@
-// @TODO : valgrind?
-
 #include <iostream>
 #include <cmath>
 #include <vector>
@@ -145,10 +143,16 @@ void performCannon(Matrix a, Matrix b, int64_t A_group_x_length, int64_t B_group
                      dest_b, i, b_new.mat, b_new.x_size * b_new.y_size,
                      MPI_DOUBLE, recv_b, i,
                      *cannon_group_comm, MPI_STATUS_IGNORE);
-
+        free(b.mat);
+        free(a.mat);
+        
         a = a_new;
         b = b_new;
+        
     }
+    free(a.mat);
+    free(b.mat);
+    
     int myRank, cross_group_comm_rank;
     MPI_Comm_rank(*world_comm, &myRank);
 
@@ -223,6 +227,8 @@ void performCannon(Matrix a, Matrix b, int64_t A_group_x_length, int64_t B_group
     {
         MPI_Comm_split(*world_comm, 1, myRank, &print64_ting_g_comm);
     }
+    free(c.mat);
+    free(c2.mat);
 }
 
 void prepare_cannon(int64_t group, int64_t n, int64_t m, int64_t k, Proc_grid g, std::pair<int64_t, int64_t> seeds, bool verbose, double count_greater, MPI_Comm *group_comm, MPI_Comm *world_comm)
