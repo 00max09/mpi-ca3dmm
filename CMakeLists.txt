@@ -3,15 +3,10 @@ project (ca3dmm)
 
 SET(CMAKE_CXX_COMPILER mpicxx)
 SET(CMAKE_CXX_STANDARD 14)
-set (CMAKE_CXX_FLAGS "-std=c++14  -Wall -O3")
-include(FindBLAS)
+set (CMAKE_CXX_FLAGS "-std=c++14 -Wall -O3 -I/net/software/local/openblas/0.3.7/include/ -L/net/software/local/openblas/0.3.7/lib -Wl,-rpath,/net/software/local/openblas/0.3.7/lib -lopenblas")
 
 add_executable(ca3dmm 
         densematgen.cpp
         densematgen.h
         ca3dmm.cpp)
 
-if (BLAS_FOUND)
-        target_compile_options(${PROJECT_NAME} PRIVATE ${BLAS_LINKER_FLAGS})
-        target_link_libraries(${PROJECT_NAME} ${BLAS_LIBRARIES})
-endif ()

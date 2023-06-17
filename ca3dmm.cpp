@@ -1,8 +1,10 @@
 #include <iostream>
 #include <cmath>
+#include <cstring>
 #include <vector>
 #include <cblas.h>
 #include <mpi.h>
+
 #include "densematgen.h"
 
 struct Proc_grid
@@ -94,9 +96,9 @@ public:
             displs[i] = count_y_start * x_size;
             count_y_start = count_y_end;
         }
-        MPI_Allgatherv(mat + (get_y_start - start_y) * x_size, part_size,
+        MPI_Allgatherv(MPI_IN_PLACE, part_size,
                        MPI_DOUBLE, mat, recvcounts,
-                       displs, MPI_DOUBLE, *cross_cannon_group);
+                       displs, MPI_DOUBLE, *cross_cannon_group);     
     }
     ~Matrix()
     {
@@ -384,4 +386,5 @@ int main(int argc, char *argv[])
     }
 
     MPI_Finalize();
+    return 0;
 }
